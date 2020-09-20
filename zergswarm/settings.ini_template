@@ -1,0 +1,24 @@
+[OVERMIND]
+# parameters defined here are used by the overmind
+# options passed to hatchlings, such as data about authenticated users
+# csv format, one set of options per row
+# options will be read as a dict, with keys defined by the header (a.k.a. first) row
+hatchling_config_file = "path_to_a_csv_file_with_options_in_rows.csv"
+# this is used when one wants to create fewer hatchlings
+# than the number of options in the hatchling_config_file
+# such as for a limited test, or if the same config file is used by
+# several satellites, each with a different subset of hatchling options
+hatchling_offset = 0
+# a count of -1 means all users in the file
+# starting at the specified offset
+hatchling_count = 1
+# number of hatchlings per colony - min and max for
+# computing the estimated number of colonies
+min_hatchlings_per_colony = 100
+max_hatchlings_per_colony = 400
+
+[HATCHLING]
+# this section defines common parameters to be used by hatchlings
+# they will be read as a dict which will update the dict of options
+# that is read from the harchling_config_file
+server_url = "https://example.com"

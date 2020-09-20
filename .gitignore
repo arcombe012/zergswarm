@@ -1,0 +1,5 @@
+__pycache__
+build
+dist
+zergswarm.egg-info
+.coverage
