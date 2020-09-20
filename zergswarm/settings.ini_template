@@ -3,7 +3,7 @@
 # options passed to hatchlings, such as data about authenticated users
 # csv format, one set of options per row
 # options will be read as a dict, with keys defined by the header (a.k.a. first) row
-hatchling_config_file = "path_to_a_csv_file_with_options_in_rows.csv"
+hatchling_config_file = path_to_a_csv_file_with_options_in_rows.csv
 # this is used when one wants to create fewer hatchlings
 # than the number of options in the hatchling_config_file
 # such as for a limited test, or if the same config file is used by
@@ -21,4 +21,4 @@ max_hatchlings_per_colony = 400
 # this section defines common parameters to be used by hatchlings
 # they will be read as a dict which will update the dict of options
 # that is read from the harchling_config_file
-server_url = "https://example.com"
+server_url = https://example.com

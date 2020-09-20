@@ -213,12 +213,3 @@ class Hatchery:
             except Exception as e_:
                 _lg.error("failed to run shutdown: {}".format(e_))
                 raise
-
-    @staticmethod
-    def report_stats() -> dict:
-        """
-        base class implementation of statistics reporting, returns an empty dict
-        if statistics should be reported, reimplement this in the Hatchling class
-        :return:    dict
-        """
-        return dict()

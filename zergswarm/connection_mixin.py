@@ -28,8 +28,19 @@ class ConnectionMixin:
     reports = None
 
     @staticmethod
-    def reset_reports(report_cls):
+    def reset_reports(report_cls=None):
+        if not report_cls:
+            report_cls = type(ConnectionMixin.reports)
+            if report_cls == type(None):
+                report_cls = Report
         ConnectionMixin.reports = report_cls()
+
+    @staticmethod
+    def report_stats() -> dict:
+        ans_ = ConnectionMixin.reports
+        ConnectionMixin.reset_reports()
+        _lg.debug("report:\n\n%s\n\n", ans_)
+        return ans_
 
     def __init__(self, base_url: str, max_retries: int = 10, retry_delay: float = 1., report_cls = Report):
         self.__report_cls = report_cls
