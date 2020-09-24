@@ -38,12 +38,15 @@ class Message:
 
 class ZeroCommServer:
     def __init__(self, server: str = "127.0.0.1"):
-        if not server.startswith("tcp://"):
+        if not "://" in server:
             self._server_ip = server
             self._server_address = None
+            self._protocol = "tcp"
         else:
             self._server_address = server
-            self._server_ip = server.split(":")[1][2:]
+            s_ = server.split(":")
+            self._server_ip = s_[1][2:]
+            self._protocol = s_[0]
         self._listener = None
         self._message_handlers = {
             "register": self._register_connection,

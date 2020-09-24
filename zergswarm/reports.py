@@ -1,6 +1,25 @@
 import typing
+import logging
 from collections import defaultdict
 import functools
+from math import floor, ceil
+
+_lg = logging.getLogger("reports")
+
+
+class Stats:
+    def __init__(self, data: list = list()):
+        self._data = sorted(data)
+
+    def median(self):
+        return self._data[len(self._data) // 2]
+
+    def perc_mid_50(self):
+        x = len(self._data) / 4
+        return (self._data[floor(x)], self._data[ceil(3*x)])
+
+    def perc_top_10(self):
+        return self._data[floor(9 * len(self._data) / 10)]
 
 
 class Report(dict):
@@ -18,18 +37,20 @@ class Report(dict):
     such as when the error code returned is one of a pre-defined set of values)
     and other errors (such as network, DNS, underlying server errors and so on)
     """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self["success"] = defaultdict(lambda: {"count": 0, "time": 0.})
+    def __init__(self):
+        super().__init__()
+        self["success"] = defaultdict(list)
         self["request errors"] = defaultdict(int)
         self["monitored errors"] = defaultdict(int)
         self["other errors"] = defaultdict(int)
+        self["statistics"] = defaultdict(int)
 
     def to_dict(self) -> dict:
         return {"success":      {k_: v_ for k_, v_ in self["success"].items()},
             "request errors":   {k_: v_ for k_, v_ in self["request errors"].items()},
             "monitored errors": {k_: v_ for k_, v_ in self["monitored errors"].items()},
             "other errors":     {k_: v_ for k_, v_ in self["other errors"].items()},
+            "statistics": {k_: v_ for k_, v_ in self["statistics"].items()},
             }
 
     @staticmethod
@@ -49,9 +70,13 @@ class Report(dict):
         dv_ = data.pop("other errors", None)
         if isinstance(dv_, typing.Mapping):                 # pragma: no branch
             r_["other errors"].update(dv_)
+        dv_ = data.pop("statistics", None)
+        if isinstance(dv_, typing.Mapping):                 # pragma: no branch
+            r_["statistics"].update(dv_)
         return r_
 
     def __add__(self, data: typing.Mapping) -> typing.Mapping:
+        _lg.debug("adding")
         r_ = Report()
         if not isinstance(data, typing.Mapping):  # pragma: no branch
             return r_
@@ -59,12 +84,9 @@ class Report(dict):
         if isinstance(dv_, typing.Mapping):  # pragma: no branch
             keys_ = set(self["success"].keys()).union(dv_.keys())
             for k_ in keys_:
-                v_ = dv_[k_]
-                if isinstance(v_, typing.Mapping) and \
-                        {"count", "time"}.issubset(v_.keys()):
-                    v0_ = self["success"][k_]
-                    r_["success"][k_]["count"] = v0_["count"] + v_["count"]
-                    r_["success"][k_]["time"] = v0_["time"] + v_["time"]
+                v_ = dv_.get(k_, [])
+                if isinstance(v_, list):
+                    r_["success"][k_] = self["success"][k_] + v_
 
         dv_ = data.pop("request errors", None)
         if isinstance(dv_, typing.Mapping):  # pragma: no branch
@@ -83,6 +105,12 @@ class Report(dict):
             keys_ = set(self["other errors"].keys()).union(dv_.keys())
             for k_ in keys_:
                 r_["other errors"][k_] = self["other errors"][k_] + dv_[k_]
+
+        dv_ = data.pop("statistics", None)
+        if isinstance(dv_, typing.Mapping):  # pragma: no branch
+            keys_ = set(self["statistics"].keys()).union(dv_.keys())
+            for k_ in keys_:
+                r_["statistics"][k_] = self["statistics"][k_] + dv_[k_]
         return r_
 
     def __sub__(self, data: typing.Mapping) -> typing.Mapping:
@@ -93,12 +121,9 @@ class Report(dict):
                 isinstance(data["success"], typing.Mapping):  # pragma: no branch
             keys_ = set(self["success"].keys()).union(data["success"].keys())
             for k_ in keys_:
-                v_ = data["success"][k_]
-                if isinstance(v_, typing.Mapping) and \
-                        {"count", "time"}.issubset(v_.keys()):
-                    v0_ = self["success"][k_]
-                    r_["success"][k_]["count"] = v0_["count"] - v_["count"]
-                    r_["success"][k_]["time"] = v0_["time"] - v_["time"]
+                v_ = data["success"].get(k_, [])
+                if isinstance(v_, list):
+                    r_["success"][k_] = [x for x in self["success"][k_] if x not in v_]
 
         if "request errors" in data.keys() and \
                 isinstance(data["request errors"], typing.Mapping):  # pragma: no branch
@@ -115,6 +140,13 @@ class Report(dict):
             keys_ = set(self["other errors"].keys()).union(data["other errors"].keys())
             for k_ in keys_:
                 r_["other errors"][k_] = self["other errors"][k_] - data["other errors"][k_]
+
+        if "statistics" in data.keys() and \
+                isinstance(data["statistics"], typing.Mapping):  # pragma: no branch
+            keys_ = set(self["statistics"].keys()).union(data["statistics"].keys())
+            for k_ in keys_:
+                r_["statistics"][k_] = self["statistics"][k_] - data["statistics"][k_]
+
         return r_
 
     def __mul__(self, data: typing.Union[float, int]) -> typing.Mapping:
@@ -122,40 +154,39 @@ class Report(dict):
         if not (isinstance(data, int) or isinstance(data, float)):  # pragma: no branch
             return r_
         for k_, v_ in self["success"].items():
-            x_ = data * v_["count"]
-            nx_ = int(data * v_["count"])
-            r_["success"][k_]["count"] = nx_
-            r_["success"][k_]["time"] = nx_ * v_["time"] / x_
+            r_["success"][k_] = [x * data for x in v_]
         for k_, v_ in self["request errors"].items():
             r_["request errors"][k_] = int(data * v_)
         for k_, v_ in self["monitored errors"].items():
             r_["monitored errors"][k_] = int(data * v_)
         for k_, v_ in self["other errors"].items():
             r_["other errors"][k_] = int(data * v_)
+        for k_, v_ in self["statistics"].items():
+            r_["statistics"][k_] = int(data * v_)
         return r_
 
     def __rmul__(self, data: typing.Union[float, int]) -> typing.Mapping:
         return self.__mul__(data)
 
     def __str__(self):
-        ans_ = "\n{}:\n\t{}".format("success",
-            "\n\t".join(
-                "{:>45}: {:>6d} [avg. {:.3f}s]".format(
-                    k1_, v1_["count"], (v1_["time"] / v1_["count"] if v1_["count"] > 0 else 0))
-                    for k1_, v1_ in self["success"].items())) + \
-            "\n" + "\n".join("{}:\n\t{}".format(k_,
-                "\n\t".join(
-                    "{:>45}: {:>6d}".format(k1_, v1_) for k1_, v1_ in self[k_].items()
-                ))
-                for k_ in ("request errors", "monitored errors", "other errors")
-            ) + "\n"
-        return ans_
+        ans_ = "\nsuccess:\n"
+        for k_, v_ in self["success"].items():
+            s_ = Stats(v_)
+            ans_ += "{:>35}: {:>6d}, median: {:.3f}s, mid 50%: {:.3f}s - {:.3f}s, top 10% above {:.3f}s\n".format(
+                k_, len(v_), s_.median(), *s_.perc_mid_50(), s_.perc_top_10())
+        for i_ in ("request errors", "monitored errors", "other errors", "statistics"):
+            ans_ += "\n{}:\n".format(i_)
+            for k_, v_ in self[i_].items():
+                ans_ += "{:>35}: {:>6d}\n".format(k_, v_)
+        return ans_ + "\n"
 
     def add_success(self, name, call_time):
-        self["success"][name]["count"] += 1
-        self["success"][name]["time"] += call_time
+        self["success"][name].append(call_time)
 
     def add_error(self, name, error_type):
         if error_type == "success" or error_type not in self.keys():
             return
         self[error_type][name] += 1
+
+    def add_statistics(self, name, value):
+        self["statistics"][name] += value

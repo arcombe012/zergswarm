@@ -67,7 +67,7 @@ class Colony:
 
     async def _get_colony_config(self):
         _lg.debug("getting hatchling configs")
-        await asyncio.sleep(0.3)
+        # await asyncio.sleep(0.3)
         try:
             _lg.debug("requesting colony config")
             cfg_ = await self._zero_client.call("get_colony_config", {"client_id": self._zero_client.client_id})
@@ -102,7 +102,7 @@ class Colony:
 
     async def _run_stats_reporter(self):
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(5)
             stats_ = self._wrapped_class.report_stats()
             if stats_:                                              # pragma: no branch
                 await self._zero_client.call("stats", {"data": stats_})
