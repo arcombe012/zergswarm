@@ -165,9 +165,10 @@ class ConnectionMixin:
                 async with method_(url=full_url_, json=json_data,
                         headers=self.__auth_headers if needs_auth else None) as resp:
                     txt_ = await resp.text()
-                    if 200 == resp.status:
+                    if 1 == resp.status // 200:
+                        # 2xx responses
                         duration_ = self._context.end - self._context.start
-                        _lg.debug("response status: 200, duration %.4fs", duration_)
+                        _lg.debug("response status: %d, duration %.4fs", resp.status, duration_)
                         self.reports.add_success(name, duration_)
                         return txt_
                     else:
@@ -177,7 +178,8 @@ class ConnectionMixin:
                         if error_status and resp.status in error_status:
                             self.reports.add_error(name, "monitored errors")
                             return txt_
-                        elif 500 <= resp.status:
+                        elif 1 == resp.status // 500:
+                            # 5xx responses
                             self.reports.add_error(name, "request errors")
                             counter_ += 1
                             await self._wait_and_increment_delay()
