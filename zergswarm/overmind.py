@@ -117,10 +117,6 @@ class Overmind:
             id_ = "unknown"
         else:
             id_ = data["client_id"]
-        now_ = datetime.utcnow()
-        if not((now_ - self._start_time).seconds % (60)):
-            # about once every ~ X minutes
-            _lg.info("[%s] received data from %s: %s", now_, id_, rdata_)
 
         try:
             self._stats_accumulator += rdata_

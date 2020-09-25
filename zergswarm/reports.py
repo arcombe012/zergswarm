@@ -16,7 +16,7 @@ class Stats:
 
     def perc_mid_50(self):
         x = len(self._data) / 4
-        return (self._data[floor(x)], self._data[ceil(3*x)])
+        return (self._data[floor(x)], self._data[floor(3*x)])
 
     def perc_top_10(self):
         return self._data[floor(9 * len(self._data) / 10)]
