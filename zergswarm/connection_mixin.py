@@ -100,6 +100,10 @@ class ConnectionMixin:
     def headers(self, new_headers):
         self.__headers = new_headers
 
+    @property
+    def base_url(self) -> str:
+        return self.__base_url
+
     async def _wait_and_increment_delay(self):
         _lg.debug("waiting ...")
         await asyncio.sleep(self.__retry_delay)
@@ -109,7 +113,7 @@ class ConnectionMixin:
             self.__retry_delay += 5
 
     async def do_request(self, *, url: str, name: str = None, request_type: str = "POST",
-            json_data: dict = None, needs_auth: bool = True,
+            data: dict = None, json_data: dict = None, needs_auth: bool = False,
             error_status: set = None) -> typing.Optional[str]:
         """
         perform a request
@@ -118,8 +122,10 @@ class ConnectionMixin:
                     specify an explicit name if the route has variable parameters
         :param request_type: type of request: POST, GET, OPTIONS, HEAD, PUT, PATCH, DELETE
                     default: POST
-        :param json_data: json data to be sent in the post request
-        :param needs_auth: if True (default) include the auth headers
+        :param data: data to be sent in the post request if not json encoded
+        :param json_data: json data to be sent in the post request if json encoded
+                    (data and json_data should not simultaneously be not None)
+        :param needs_auth: if True (default  False) include the auth headers
         :param error_status: set or error status values to monitor (for monitored errors
                     the response is returned instead of None)
         :return: the call response, or None for unmonitored or connection errors
@@ -135,6 +141,9 @@ class ConnectionMixin:
             _lg.error("authorization needed and not present in headers")
             self.reports["request errors"][name] += 1
             return None
+
+        if data is not None and json_data is not None:
+            _lg.error("set either data or json_data, but not both")
 
         counter_ = 0
         full_url_ = self.__base_url + url
@@ -162,9 +171,15 @@ class ConnectionMixin:
 
         while counter_ < self.__max_retries:
             try:
-                async with method_(url=full_url_, json=json_data,
+                async with method_(url=full_url_, data=data, json=json_data,
                         headers=self.__auth_headers if needs_auth else None) as resp:
-                    txt_ = await resp.text()
+                    ans_ = await resp.read()
+                    try:
+                        # try to decode as text
+                        txt_ = ans_.decode()
+                    except:
+                        # pass along binary result
+                        txt_ = ans_
                     if 1 == resp.status // 200:
                         # 2xx responses
                         duration_ = self._context.end - self._context.start
