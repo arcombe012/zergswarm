@@ -170,10 +170,14 @@ class Report(dict):
 
     def __str__(self):
         ans_ = "\nsuccess:\n"
+        vals_ = []
         for k_, v_ in self["success"].items():
             s_ = Stats(v_)
-            ans_ += "{:>35}: {:>6d}, median: {:.3f}s, mid 50%: {:.3f}s - {:.3f}s, top 10% above {:.3f}s\n".format(
-                k_, len(v_), s_.median(), *s_.perc_mid_50(), s_.perc_top_10())
+            vals_.append((k_, len(v_), s_.median(), *s_.perc_mid_50(), s_.perc_top_10()))
+        vals_.sort(key=lambda x: x[-1], reverse=True)
+        for v_ in vals_:
+            ans_ += "{:>45}: {:>6d}, median: {:.3f}s, mid 50%: {:.3f}s - {:.3f}s, top 10% above {:.3f}s\n".format(
+                *v_)
         for i_ in ("request errors", "monitored errors", "other errors", "statistics"):
             ans_ += "\n{}:\n".format(i_)
             for k_, v_ in self[i_].items():

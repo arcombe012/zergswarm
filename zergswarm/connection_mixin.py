@@ -31,7 +31,7 @@ class ConnectionMixin:
     def reset_reports(report_cls=None):
         if not report_cls:
             report_cls = type(ConnectionMixin.reports)
-            if report_cls == type(None):
+            if type(None) == report_cls:
                 report_cls = Report
         ConnectionMixin.reports = report_cls()
 
@@ -42,7 +42,8 @@ class ConnectionMixin:
         _lg.debug("report:\n\n%s\n\n", ans_)
         return ans_
 
-    def __init__(self, base_url: str, max_retries: int = 10, retry_delay: float = 1., report_cls = Report):
+    def __init__(self, base_url: str, max_retries: int = 10, retry_delay: float = 1.,
+            report_cls=Report):
         self.__report_cls = report_cls
         if not ConnectionMixin.reports:
             ConnectionMixin.reset_reports(report_cls)
@@ -53,11 +54,12 @@ class ConnectionMixin:
         self.__max_retries = max_retries    # type: int
         self.__retry_delay = retry_delay    # type: float
         self._context = types.SimpleNamespace()     # type: types.SimpleNamespace
+        # noinspection PyTypeChecker
         self._tracer = aiohttp.TraceConfig(trace_config_ctx_factory=self.context)
         self._tracer.on_request_start.append(_on_request_start)
         self._tracer.on_request_end.append(_on_request_end)
 
-    def context(self, *args, **kwargs):
+    def context(self, *args, **kwargs) -> types.SimpleNamespace:
         return self._context
 
     async def setup_session(self):
@@ -113,8 +115,9 @@ class ConnectionMixin:
             self.__retry_delay += 5
 
     async def do_request(self, *, url: str, name: str = None, request_type: str = "POST",
-            data: dict = None, json_data: dict = None, needs_auth: bool = False,
-            error_status: set = None) -> typing.Optional[str]:
+            data: dict = None, json_data: dict = None, needs_auth: bool = False, cookies=None,
+            error_status: set = None, detailed_response: bool = False) \
+            -> typing.Optional[typing.Union[str, tuple]]:
         """
         perform a request
         :param url: route to append to the base url
@@ -126,9 +129,14 @@ class ConnectionMixin:
         :param json_data: json data to be sent in the post request if json encoded
                     (data and json_data should not simultaneously be not None)
         :param needs_auth: if True (default  False) include the auth headers
+        :param cookies: optional request cookies, to be merged with the session ones
         :param error_status: set or error status values to monitor (for monitored errors
                     the response is returned instead of None)
-        :return: the call response, or None for unmonitored or connection errors
+        :param detailed_response: if False (default) return only the response, otherwise
+                    return additional metadata information
+        :return: if not detailed_response, return the call response,
+                    or (call response, content_type, response_headers, cookies) otherwise
+                    for various kinds of errors return None
         """
         if name is None:
             name = url
@@ -136,63 +144,64 @@ class ConnectionMixin:
             _lg.error("no active session")
             self.reports["request errors"][name] += 1
             return None
-        if needs_auth and (self.__auth_headers is None
-                or "authorization" not in self.__auth_headers.keys()):
-            _lg.error("authorization needed and not present in headers")
+        if needs_auth and (not self.__auth_headers):
+            _lg.error("authorization needed and not present in headers [%s]", self.__auth_headers)
             self.reports["request errors"][name] += 1
             return None
 
         if data is not None and json_data is not None:
             _lg.error("set either data or json_data, but not both")
+            return None
 
         counter_ = 0
-        full_url_ = self.__base_url + url
-        if "POST" == request_type:
-            _lg.debug("performing a POST to %s", full_url_)
-            method_ = self.__session.post
-        elif "GET" == request_type:
-            _lg.debug("performing a GET to %s", full_url_)
-            method_ = self.__session.get
-        elif "OPTIONS" == request_type:
-            _lg.debug("performing an OPTIONS to %s", full_url_)
-            method_ = self.__session.options
-        elif "PUT" == request_type:
-            _lg.debug("performing a PUT to %s", full_url_)
-            method_ = self.__session.put
-        elif "PATCH" == request_type:
-            _lg.debug("performing a PATCH to %s", full_url_)
-            method_ = self.__session.patch
-        elif "DELETE" == request_type:
-            _lg.debug("performing a DELETE to %s", full_url_)
-            method_ = self.__session.delete
-        elif "HEAD" == request_type:
-            _lg.debug("performing a HEAD to %s", full_url_)
-            method_ = self.__session.head
+        if "/" == url[0]:
+            full_url_ = self.__base_url + url
+        else:
+            full_url_ = url
 
         while counter_ < self.__max_retries:
             try:
-                async with method_(url=full_url_, data=data, json=json_data,
+                async with self.__session.request(method=request_type,
+                        url=full_url_, data=data, json=json_data, cookies=cookies,
                         headers=self.__auth_headers if needs_auth else None) as resp:
                     ans_ = await resp.read()
                     try:
                         # try to decode as text
-                        txt_ = ans_.decode()
-                    except:
+                        txt_ = ans_.decode(errors="strict")
+                    except UnicodeDecodeError:
                         # pass along binary result
                         txt_ = ans_
-                    if 1 == resp.status // 200:
-                        # 2xx responses
+                    if 400 > resp.status:
+                        # 2xx and 3xx responses are considered success
                         duration_ = self._context.end - self._context.start
                         _lg.debug("response status: %d, duration %.4fs", resp.status, duration_)
                         self.reports.add_success(name, duration_)
-                        return txt_
+                        if not detailed_response:
+                            return txt_
+                        else:
+                            return txt_, resp.content_type, resp.headers, resp.cookies
                     else:
-                        _lg.error(("error received while calling %s: status=%s "
-                            "[attempt %s of %s]"), url, resp.status, counter_ + 1,
+                        if 1 == resp.status // 400:
+                            _lg.error("error received while calling %s: status=%s reason=%s",
+                                url, resp.status, resp.reason)
+                            # 4xx errors are fatal unless monitored
+                            if error_status and resp.status in error_status:
+                                self.reports.add_error(name, "monitored errors")
+                                if not detailed_response:
+                                    return txt_
+                                else:
+                                    return txt_, resp.content_type, resp.headers, resp.cookies
+                            self.reports.add_error(name, "other errors")
+                            break
+                        _lg.error(("error received while calling %s: status=%s reason=%s"
+                            "[attempt %s of %s]"), url, resp.status, resp.reason, counter_ + 1,
                             self.__max_retries)
                         if error_status and resp.status in error_status:
                             self.reports.add_error(name, "monitored errors")
-                            return txt_
+                            if not detailed_response:
+                                return txt_
+                            else:
+                                return txt_, resp.content_type, resp.headers, resp.cookies
                         elif 1 == resp.status // 500:
                             # 5xx responses
                             self.reports.add_error(name, "request errors")
@@ -209,10 +218,15 @@ class ConnectionMixin:
         return None
 
     async def do_request_json(self, *, url: str, name: str = None, request_type: str = "POST",
-            json_data: dict = None, needs_auth: bool = True,
-            error_status: set = None) -> typing.Optional[dict]:
-        ans_ = await self.do_request(url=url, name=name, request_type=request_type, json_data=json_data,
-            needs_auth=needs_auth, error_status=error_status)
-        if not ans_:
+            data: dict = None, json_data: dict = None, needs_auth: bool = False, cookies=None,
+            error_status: set = None, detailed_response: bool = False) \
+            -> typing.Optional[typing.Union[dict, tuple]]:
+        ans_ = await self.do_request(url=url, name=name, request_type=request_type,
+            data=data, json_data=json_data, needs_auth=needs_auth, cookies=cookies,
+            error_status=error_status, detailed_response=True)
+        if not ans_ or ans_[1] != "application/json":
             return None
-        return json.loads(ans_)
+        if not detailed_response:
+            return json.loads(ans_[0])
+        else:
+            return (json.loads(ans_[0]), *ans_[1:])

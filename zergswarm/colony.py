@@ -101,17 +101,34 @@ class Colony:
                 _lg.exception("failed to run tasks: %s", e_)
 
     async def _run_stats_reporter(self):
-        while True:
-            await asyncio.sleep(5)
-            stats_ = self._wrapped_class.report_stats()
-            if stats_:                                              # pragma: no branch
-                await self._zero_client.call("stats", {"data": stats_})
-            if not self._lock.locked():
-                break
+        try:
+            while True:
+                if self._lock.locked():
+                    # tasks are running, wait before reporting stats
+                    await asyncio.sleep(60)
+                stats_ = self._wrapped_class.report_stats()
+                if stats_:                                              # pragma: no branch
+                    await asyncio.shield(self._zero_client.call("stats", {"data": stats_}))
+                if not self._lock.locked():
+                    break
+        except asyncio.CancelledError:
+            # cancellation happens if all hatchlings finished
+            _lg.info("stats reporter cancelled")
+        except Exception as e_:
+            _lg.exception("exception while running the stats reporter: %s", e_)
 
     async def _run_async(self):
         async with self._zero_client:
-            await asyncio.wait([self._run_tasks(), self._run_stats_reporter()])
+            t1_ = asyncio.ensure_future(self._run_tasks())
+            t2_ = asyncio.ensure_future(self._run_stats_reporter())
+            done_, pending_ = await asyncio.wait({t1_, t2_}, return_when=asyncio.FIRST_COMPLETED)
+            for t_ in pending_:
+                # this should be t2_, unless something bad happened to the stats reporter
+                # in which case cancel the hatchlings
+                t_.cancel()
+            # run the stats reporter one more time in case there are left-over stats
+            # self._lock is released, so this should only run once
+            await self._run_stats_reporter()
 
     def run(self):
         _lg.debug("running")
@@ -151,7 +168,7 @@ class Hatchery:
             for task_ in self.__class__.tasks_parallel:
                 tasks_ += [task_(self) for _ in range(task_.__dict__.get("weight", 1))]
             if tasks_:
-               await asyncio.wait(tasks_)
+                await asyncio.wait(tasks_)
 
     async def run_ordered(self):
         for task_ in self.__class__.tasks_ordered:

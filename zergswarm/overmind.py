@@ -93,38 +93,35 @@ class Overmind:
     async def _stats_accumulator_callback(self, data: dict) -> dict:
         if not isinstance(data, dict) or 0 == len(data):
             return {}
+        if not data.get("client_id", None):
+            id_ = "unknown"
+        else:
+            id_ = data["client_id"]
+
         if self._comm_sender is not None:
             # pass this along to the central overmind
             try:
-                ans_ = await asyncio.wait_for(self._send_to_central(data), 2)
+                await asyncio.wait_for(self._send_to_central(data), 4)
             except asyncio.TimeoutError:
                 err_ = "timeout while attempting to send stats to central overmind"
                 _lg.error(err_)
-                return {"client_id": data.get("client_id", "unknown"),
-                        "data": {"stats": "error", "error": err_}}
+                return {"client_id": id_, "data": {"stats": "error", "error": err_}}
             except Exception as e_:
                 _lg.error("exception caught while attempting to send stats to central overmind: %s", str(e_))
-                return {"client_id": data.get("client_id", "unknown"),
-                    "data": {"stats": "error", "error": str(e_)}}
+                return {"client_id": id_, "data": {"stats": "error", "error": str(e_)}}
         try:
             rdata_ = self._report_class.from_dict(data["data"])
         except Exception as e_:
             err_ = "failed to construct report from stat message: [%s] %s", e_.__class__.__name__, e_
             _lg.error(err_)
-            return {"client_id": data.get("client_id", "unknown"),
-                "data": {"stats": "error", "error": err_}}
-        if not data.get("client_id", None):
-            id_ = "unknown"
-        else:
-            id_ = data["client_id"]
+            return {"client_id": id_, "data": {"stats": "error", "error": err_}}
 
         try:
             self._stats_accumulator += rdata_
             return {"data": {"result": "ok"}}
         except Exception as e_:
             _lg.error("caught exception while adding stats: %s", e_)
-            return {"client_id": data.get("client_id", "unknown"),
-                    "data": {"stats": "error", "error": str(e_)}}
+            return {"client_id": id_, "data": {"stats": "error", "error": str(e_)}}
 
     def _colony_config(self, data: dict):
         if not isinstance(data, dict) or data.get("client_id", None) is None:
@@ -216,26 +213,8 @@ class Overmind:
         self.print_stats()
 
     def print_stats(self):
-        # buff_ = StringIO()
-        # for k_, v_ in self._stats_accumulator.items():
-        #     print("{}: {}".format(k_, v_), file=buff_)
-        # _lg.info("reported stats:\n%s", buff_.getvalue())
-        # buff_.close()
         if len(self._stats_accumulator) == 0:
             _lg.warning("empty accumulator, no stats printed\n%s", self._stats_accumulator)
 
         time_ = self._stop_time - self._start_time   # type: timedelta
         _lg.info("reported stats over %d minutes:\n%s", time_.seconds / 60, self._stats_accumulator)
-
-        # output_ = "stats_output.csv"
-        # fields = set()
-        # for v_ in self._stats_accumulator.values():
-        #     fields.update(v_["success"].keys())
-        # fields = ["time"] + sorted(fields)
-        # with open(output_, "wt") as outf_:
-        #     dwrt_ = csv.DictWriter(outf_, fieldnames=list(fields), restval=0)
-        #     dwrt_.writeheader()
-        #     for k_, v_ in self._stats_accumulator.items():
-        #         row_ = {"time": k_.time()}
-        #         row_.update({k1_: v1_["count"] for k1_, v1_ in v_["success"].items()})
-        #         dwrt_.writerow(row_)
