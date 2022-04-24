@@ -25,7 +25,7 @@ class Message:
 
     def encode(self) -> bytes:
         return json.dumps({"message_type": self.message_type, "payload": self.payload},
-            ensure_ascii=False).encode("utf-8")
+            ensure_ascii=False, check_circular=False).encode("utf-8")
 
     @classmethod
     def decode(cls, raw_message):

@@ -1,12 +1,10 @@
 import asyncio
 import argparse
 import logging
-import csv
-import time
+import typing
 # from io import StringIO
 from math import ceil
 from datetime import datetime, timedelta
-from collections import OrderedDict
 
 from .comm_center import ZeroCommServer, ZeroCommClient
 from .config_reader import ConfigReader
@@ -52,7 +50,11 @@ class Overmind:
         self._hatchlings_per_col = [x_ for _ in range(req_cols_ - n1_)] + [(x_ + 1) for _ in range(n1_)]
         self._colonies = dict()
         self._satellites = set()
-        self._start_time = datetime.utcnow()
+        delay_ = float(cmdline_["launch_delay"])
+        if delay_ > 0:
+            self._start_time = datetime.utcnow() + timedelta(seconds=delay_)
+        else:
+            self._start_time = datetime.utcnow()
 
     async def _send_to_central(self, data: dict) -> dict:
         ans_ = {}
@@ -62,7 +64,7 @@ class Overmind:
             ans_ = await sender.call(message_type="stats", data=data)
         return ans_
 
-    async def _notify_central(self, action: str) -> None:
+    async def _notify_central(self, action: str) -> typing.Optional[dict]:
         """
         notify a central overmind, if any
         :param action: str, either "register" or "unregister"
@@ -71,7 +73,8 @@ class Overmind:
         if not self._comm_sender:
             return
         async with self._comm_sender as sender:     # type: ZeroCommClient
-            _ = await sender.call(message_type="satellite_action", data={"action": action})
+            ans_ = await sender.call(message_type="satellite_action", data={"action": action})
+        return ans_
 
     def _satellite_action(self, data: dict) -> dict:
         if not isinstance(data, dict) or 0 == len(data):
@@ -87,7 +90,7 @@ class Overmind:
             return {"client_id": id_, "data": {"result": "error", "error": "invalid request"}}
         if "register" == data["data"].get("action", "register"):
             self._satellites.add(id_)
-            return {"client_id": id_, "data": {"result": "ok"}}
+            return {"client_id": id_, "data": {"result": "ok", "start": str(self._start_time)}}
         return {"client_id": id_, "data": {"result": "error", "error": "invalid request"}}
 
     async def _stats_accumulator_callback(self, data: dict) -> dict:
@@ -136,7 +139,9 @@ class Overmind:
             else:
                 self._colonies[id_] = self._hatchlings_per_col[len(self._colonies)]
         _lg.debug("returning colony config: %s", self._colonies[id_])
-        return {"client_id": data.get("client_id", "unknown"), "data": {"hatchlings": self._colonies[id_]}}
+        return {
+            "client_id": data.get("client_id", "unknown"),
+            "data": {"hatchlings": self._colonies[id_]}}
 
     def _hatchlings_config(self, data: dict):
         if not self._configs or not isinstance(data, dict):   # zero length array takes this branch
@@ -151,7 +156,10 @@ class Overmind:
                 self._configs = self._configs[n_:]
                 ans_ = cnf_
         _lg.debug("returning %s hatchling configs", len(ans_))
-        return {"client_id": data.get("client_id", "unknown"), "data": {"configs": ans_}}
+        return {
+            "client_id": data.get("client_id", "unknown"),
+            "data": {"configs": ans_}
+            }
 
     @staticmethod
     def _parse_cmdline() -> dict:
@@ -166,12 +174,18 @@ class Overmind:
         ap_.add_argument("--central_server", "-c",
             help="full URI of the central server coordinating all overminds, if any (tcp://IP:port) (default is None)",
             type=str, default=None, required=False)
-        ap_.add_argument("--settings_file", "-s", help="custom settings file (default is {})".format(default_settings_),
+        ap_.add_argument("--settings_file", "-s",
+            help="custom settings file (default is {})".format(default_settings_),
             type=str, default=default_settings_, required=False)
-        ap_.add_argument("--hatchery_file", "-x", help="custom hatchery file (default is {})".format(default_hatchery_),
+        ap_.add_argument("--hatchery_file", "-x",
+            help="custom hatchery file (default is {})".format(default_hatchery_),
             type=str, default=default_hatchery_, required=False)
         ap_.add_argument("--log_level", "-l", type=str, choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-            default="INFO", required=False, help="log level for the overmind coordinator")
+            default="INFO", required=False,
+            help="log level for the overmind coordinator default is INFO")
+        ap_.add_argument("--launch_delay", "-d",
+            help="launch delay (in seconds), to finish setting things up (default is 0)",
+            type=int, default=0)
         return ap_.parse_known_args()[0].__dict__
 
     def required_colony_count(self, hatchlings: int, colony_slots: int) -> int:
@@ -190,8 +204,17 @@ class Overmind:
             # have to put this message out for external connections
             _lg.info("overmind listening to 0MQ connections on {}".format(srv.server_address))
             if self._comm_sender:
-                await self._notify_central("register")
-            await self._spawner.run_colonies(server_address=srv.server_address, hatchery_file=self._hatchery_file)
+                ans_ = await self._notify_central("register")
+                if ans_:
+                    try:
+                        self._start_time = datetime.fromisoformat(ans_["data"]["start"])
+                    except:
+                        _lg.error("invalid start time received from central: %s", ans_)
+            delta_ = (self._start_time - datetime.utcnow()).seconds
+            if delta_ > 0:
+                await asyncio.sleep(delta_)
+            await self._spawner.run_colonies(
+                server_address=srv.server_address, hatchery_file=self._hatchery_file)
             if self._comm_sender:
                 await self._notify_central("unregister")
             else:
