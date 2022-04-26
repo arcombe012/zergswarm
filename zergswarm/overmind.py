@@ -23,7 +23,8 @@ class Overmind:
         # sanity check
         if cmdline_["log_level"] not in logging._nameToLevel.keys():
             cmdline_["log_level"] = "INFO"
-        logging.basicConfig()
+        logging.basicConfig(
+            format="[%(asctime)s][%(levelname)s][%(name)s][%(filename)s:%(lineno)s] %(message)s")
         logging.root.setLevel(logging._nameToLevel[cmdline_["log_level"]])
         _lg.info("logging level is set to %s", logging.getLevelName(logging.root.getEffectiveLevel()))
         if isinstance(cmdline_["central_server"], str):
@@ -210,8 +211,10 @@ class Overmind:
                         self._start_time = datetime.fromisoformat(ans_["data"]["start"])
                     except:
                         _lg.error("invalid start time received from central: %s", ans_)
-            delta_ = (self._start_time - datetime.utcnow()).seconds
-            if delta_ > 0:
+            now_ = datetime.utcnow()
+            if self._start_time > now_:
+                delta_ = (self._start_time - now_).seconds
+                _lg.info("waiting for %ss before starting", delta_)
                 await asyncio.sleep(delta_)
             await self._spawner.run_colonies(
                 server_address=srv.server_address, hatchery_file=self._hatchery_file)
