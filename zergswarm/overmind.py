@@ -17,16 +17,17 @@ _lg = logging.getLogger("zergswarm")
 class Overmind:
     # noinspection PyProtectedMember
     def __init__(self, report_class=Report):
-        _lg.debug("raising the overmind")
         cmdline_ = Overmind._parse_cmdline()
-        _lg.debug("command line parsed as %s", cmdline_)
         # sanity check
         if cmdline_["log_level"] not in logging._nameToLevel.keys():
             cmdline_["log_level"] = "INFO"
         logging.basicConfig(
             format="[%(asctime)s][%(levelname)s][%(name)s][%(filename)s:%(lineno)s] %(message)s")
         logging.root.setLevel(logging._nameToLevel[cmdline_["log_level"]])
-        _lg.info("logging level is set to %s", logging.getLevelName(logging.root.getEffectiveLevel()))
+        _lg.debug("raising the overmind")
+        _lg.debug("command line parsed as %s", cmdline_)
+        _lg.info("logging level is set to %s", logging.getLevelName(
+            logging.root.getEffectiveLevel()))
         if isinstance(cmdline_["central_server"], str):
             self._comm_sender = ZeroCommClient(cmdline_["central_server"])
         else:
@@ -51,11 +52,15 @@ class Overmind:
         self._hatchlings_per_col = [x_ for _ in range(req_cols_ - n1_)] + [(x_ + 1) for _ in range(n1_)]
         self._colonies = dict()
         self._satellites = set()
+        ri_ = float(cmdline_["reporting_interval"])
+        self._reporting_interval = min(ri_, 10)
+        
         delay_ = float(cmdline_["launch_delay"])
         if delay_ > 0:
             self._start_time = datetime.utcnow() + timedelta(seconds=delay_)
         else:
             self._start_time = datetime.utcnow()
+        self._stop_time = None
 
     async def _send_to_central(self, data: dict) -> dict:
         ans_ = {}
@@ -127,6 +132,13 @@ class Overmind:
             _lg.error("caught exception while adding stats: %s", e_)
             return {"client_id": id_, "data": {"stats": "error", "error": str(e_)}}
 
+    async def _stats_updates(self):
+        period_ = self._reporting_interval * 60
+        _lg.info("running intermediate stats reporting every %.2fs", period_)
+        while True:
+            await asyncio.sleep(period_)
+            self.print_stats()
+
     def _colony_config(self, data: dict):
         if not isinstance(data, dict) or data.get("client_id", None) is None:
             id_ = "unknown_{}".format(len(self._colonies))
@@ -187,6 +199,9 @@ class Overmind:
         ap_.add_argument("--launch_delay", "-d",
             help="launch delay (in seconds), to finish setting things up (default is 0)",
             type=int, default=0)
+        ap_.add_argument("--reporting_interval", "-r",
+            help="intermediate reporting interval (in minutes) (default is 0, no reports)",
+            type=float, default=0)
         return ap_.parse_known_args()[0].__dict__
 
     def required_colony_count(self, hatchlings: int, colony_slots: int) -> int:
@@ -216,8 +231,13 @@ class Overmind:
                 delta_ = (self._start_time - now_).seconds
                 _lg.info("waiting for %ss before starting", delta_)
                 await asyncio.sleep(delta_)
-            await self._spawner.run_colonies(
+            main_task_ = self._spawner.run_colonies(
                 server_address=srv.server_address, hatchery_file=self._hatchery_file)
+            if self._reporting_interval <= 1:
+                await main_task_
+            else:
+                await asyncio.wait([main_task_, self._stats_updates()],
+                    return_when=asyncio.FIRST_COMPLETED)
             if self._comm_sender:
                 await self._notify_central("unregister")
             else:
@@ -240,7 +260,9 @@ class Overmind:
 
     def print_stats(self):
         if len(self._stats_accumulator) == 0:
-            _lg.warning("empty accumulator, no stats printed\n%s", self._stats_accumulator)
-
-        time_ = self._stop_time - self._start_time   # type: timedelta
-        _lg.info("reported stats over %d minutes:\n%s", time_.seconds / 60, self._stats_accumulator)
+            _lg.info("empty accumulator, no stats printed\n%s", self._stats_accumulator)
+        if self._stop_time is not None:
+            time_ = self._stop_time - self._start_time   # type: timedelta
+        else:
+            time_ = datetime.utcnow() - self._start_time   # type: timedelta
+        _lg.info("reported stats over %.2f minutes:\n%s", time_.seconds / 60, self._stats_accumulator)
