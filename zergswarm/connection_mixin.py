@@ -3,6 +3,7 @@ import asyncio
 import typing
 import types
 import json
+import socket
 
 import aiohttp
 
@@ -25,19 +26,20 @@ class ConnectionMixin:
     # all statistics are already aggregated
     # no locks means pretty please do not use thread executors
     # to avoid a need for locks :-)
-    reports = None
+    __reports = None
+    __connector: aiohttp.BaseConnector = None
 
     @staticmethod
     def reset_reports(report_cls=None):
         if not report_cls:
-            report_cls = type(ConnectionMixin.reports)
+            report_cls = type(ConnectionMixin.__reports)
             if type(None) == report_cls:
                 report_cls = Report
-        ConnectionMixin.reports = report_cls()
+        ConnectionMixin.__reports = report_cls()
 
     @staticmethod
     def report_stats() -> dict:
-        ans_ = ConnectionMixin.reports
+        ans_ = ConnectionMixin.__reports
         ConnectionMixin.reset_reports()
         _lg.debug("report:\n\n%s\n\n", ans_)
         return ans_
@@ -45,7 +47,7 @@ class ConnectionMixin:
     def __init__(self, base_url: str, max_retries: int = 10, retry_delay: float = 1.,
             report_cls=Report):
         self.__report_cls = report_cls
-        if not ConnectionMixin.reports:
+        if not ConnectionMixin.__reports:
             ConnectionMixin.reset_reports(report_cls)
         self.__session = None               # type: typing.Optional[aiohttp.ClientSession]
         self.__headers = None
@@ -60,11 +62,36 @@ class ConnectionMixin:
         self._tracer.on_request_end.append(_on_request_end)
 
     def context(self, *args, **kwargs) -> types.SimpleNamespace:
+        _lg.debug("context params: %s, %s", args, kwargs)
         return self._context
 
-    async def setup_session(self):
-        self.__session = aiohttp.ClientSession(headers=self.__headers,
-           trace_configs=[self._tracer])
+    async def setup_session(self, custom_connector: bool = False):
+        """
+        set up a client session; can request a custom connector class
+        if the object is not used as a context manager.
+
+        :param custom_connector: object of type derived from aiohttp.BaseConnector,
+            typically aiohttp.TCPConnector
+        :return:
+        """
+        _lg.info("setting up session")
+        try:
+            if custom_connector:
+                if not ConnectionMixin.__connector:
+                    ConnectionMixin.__connector = aiohttp.TCPConnector(
+                        verify_ssl=True, use_dns_cache=True, ttl_dns_cache=600,
+                        family=socket.AF_INET, limit=10000, enable_cleanup_closed=True,
+                        force_close=True
+                    )
+                self.__session = aiohttp.ClientSession(headers=self.__headers,
+                    connector=ConnectionMixin.__connector, connector_owner=False,
+                    trace_configs=[self._tracer], auto_decompress=True)
+            else:
+                self.__session = aiohttp.ClientSession(headers=self.__headers,
+                    trace_configs=[self._tracer], auto_decompress=True)
+        except Exception as e_:
+            _lg.error(e_)
+            raise
 
     async def close_session(self):
         await self.__session.close()
@@ -142,16 +169,19 @@ class ConnectionMixin:
             name = url
         if self.__session is None or self.__session.closed:
             _lg.error("no active session")
-            self.reports["request errors"][name] += 1
+            ConnectionMixin.__reports["request errors"][name] += 1
             return None
         if needs_auth and (not self.__auth_headers):
             _lg.error("authorization needed and not present in headers [%s]", self.__auth_headers)
-            self.reports["request errors"][name] += 1
+            ConnectionMixin.__reports["request errors"][name] += 1
             return None
 
-        if data is not None and json_data is not None:
+        if data and json_data:
             _lg.error("set either data or json_data, but not both")
             return None
+
+        if data is None and json_data is None:
+            data = ""
 
         counter_ = 0
         if "/" == url[0]:
@@ -161,8 +191,13 @@ class ConnectionMixin:
 
         while counter_ < self.__max_retries:
             try:
-                async with self.__session.request(method=request_type,
-                        url=full_url_, data=data, json=json_data, cookies=cookies,
+                compress_ = True
+                _lg.debug("performing a %s request to %s:\n%s", request_type, full_url_,
+                    dict(method=request_type, url=full_url_,
+                        data=data, json=json_data, cookies=cookies, compress=compress_,
+                        headers=self.__auth_headers if needs_auth else None))
+                async with self.__session.request(method=request_type, url=full_url_,
+                        data=data, json=json_data, cookies=cookies, compress=compress_,
                         headers=self.__auth_headers if needs_auth else None) as resp:
                     ans_ = await resp.read()
                     try:
@@ -175,7 +210,7 @@ class ConnectionMixin:
                         # 2xx and 3xx responses are considered success
                         duration_ = self._context.end - self._context.start
                         _lg.debug("response status: %d, duration %.4fs", resp.status, duration_)
-                        self.reports.add_success(name, duration_)
+                        ConnectionMixin.__reports.add_success(name, duration_)
                         if not detailed_response:
                             return txt_
                         else:
@@ -186,25 +221,25 @@ class ConnectionMixin:
                                 url, resp.status, resp.reason)
                             # 4xx errors are fatal unless monitored
                             if error_status and resp.status in error_status:
-                                self.reports.add_error(name, "monitored errors")
+                                ConnectionMixin.__reports.add_error(name, "monitored errors")
                                 if not detailed_response:
                                     return txt_
                                 else:
                                     return txt_, resp.content_type, resp.headers, resp.cookies
-                            self.reports.add_error(name, "other errors")
+                            ConnectionMixin.__reports.add_error(name, "other errors")
                             break
                         _lg.error(("error received while calling %s: status=%s reason=%s"
                             "[attempt %s of %s]"), url, resp.status, resp.reason, counter_ + 1,
                             self.__max_retries)
                         if error_status and resp.status in error_status:
-                            self.reports.add_error(name, "monitored errors")
+                            ConnectionMixin.__reports.add_error(name, "monitored errors")
                             if not detailed_response:
                                 return txt_
                             else:
                                 return txt_, resp.content_type, resp.headers, resp.cookies
                         elif 1 == resp.status // 500:
                             # 5xx responses
-                            self.reports.add_error(name, "request errors")
+                            ConnectionMixin.__reports.add_error(name, "request errors")
                             counter_ += 1
                             await self._wait_and_increment_delay()
                             continue
@@ -212,7 +247,7 @@ class ConnectionMixin:
                 counter_ += 1
                 _lg.error("caught a %s while accessing %s: %s [attempt %s of %s]",
                     type(e_).__name__, url, e_, counter_, self.__max_retries)
-                self.reports.add_error(name, "other errors")
+                ConnectionMixin.__reports.add_error(name, "other errors")
                 continue
             break
         return None
@@ -223,10 +258,10 @@ class ConnectionMixin:
             -> typing.Optional[typing.Union[dict, tuple]]:
         ans_ = await self.do_request(url=url, name=name, request_type=request_type,
             data=data, json_data=json_data, needs_auth=needs_auth, cookies=cookies,
-            error_status=error_status, detailed_response=True)
+            error_status=error_status, detailed_response=detailed_response)
         if not ans_ or ans_[1] != "application/json":
             return None
         if not detailed_response:
             return json.loads(ans_[0])
         else:
-            return (json.loads(ans_[0]), *ans_[1:])
+            return json.loads(ans_[0]), *ans_[1:]

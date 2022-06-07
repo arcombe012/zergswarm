@@ -1,4 +1,4 @@
 toolz
 pyzmq
-aiohttp
-
+aiodns
+aiohttp[speedups]

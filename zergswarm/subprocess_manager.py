@@ -29,18 +29,27 @@ class ColonySpawner:
             _lg.warning("hatchery file [{}] not found, using default".format(hatchery_file))
             hatchery_file = "hatchery.py"
         if debug:               # pragma: no branch
-            command_ = [
-                sys.executable, "-c", ("import {} as hatchery; import logging; "
-                                       "logging.basicConfig(level=logging.DEBUG); "
-                                       "hatchery.Hatchling('{}').run()").format(
-                    hatchery_file[:-3], server_address)
-                ]
+            script_ = (
+                """import importlib.util
+import sys
+spec = importlib.util.spec_from_file_location("hatchery", "{}")
+hatchery = importlib.util.module_from_spec(spec)
+sys.modules["hatchery"] = hatchery
+spec.loader.exec_module(hatchery)
+import logging
+logging.basicConfig(level=logging.DEBUG)
+hatchery.Hatchling("{}").run()""").format(hatchery_file, server_address)
         else:
-            command_ = [
-                sys.executable, "-c", ("import {} as hatchery; "
-                                       "hatchery.Hatchling('{}').run()").format(
-                    hatchery_file[:-3], server_address)
-            ]
+            script_ = (
+                """import importlib.util
+import sys
+spec = importlib.util.spec_from_file_location("hatchery", "{}")
+hatchery = importlib.util.module_from_spec(spec)
+sys.modules["hatchery"] = hatchery
+spec.loader.exec_module(hatchery)
+hatchery.Hatchling("{}").run()""").format(hatchery_file, server_address)
+        _lg.debug("running hatchery script as:\n%s", script_)
+        command_ = [sys.executable, "-c", script_]
         procs_ = [await asyncio.create_subprocess_exec(*command_) for _ in range(self._colony_count)]
         async with self._lock:
             pending_ = [p_.wait() for p_ in procs_]
